@@ -1,97 +1,140 @@
-#include <SoftwareSerial.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 
-const int trigPin = 11;    // 超音波感測器 Trig腳接 Arduino pin 11
-const int echoPin = 12;    // 超音波感測器 Echo 腳接 Arduino pin 12
-const int speakerPin = 7;  // 蜂鳴器 + 腳接 Arduino pin 7
-const int TX  = 10;
-const int RX  = 9;
-const int ESPTX  = 2;
-const int ESPRX  = 3;
-SoftwareSerial ESPserial(ESPRX, ESPTX); // 建立軟體序列埠來與 ESP-01S 通訊
-SoftwareSerial BT(RX, TX);
+// Ultrasonic sensor pins
+const int trigPin1 = D10;  // Ultrasonic sensor Trig pin
+const int echoPin1 = D11;  // Ultrasonic sensor Echo pin
+const int speakerPin = D8; // Buzzer pin
 
-const int delay_time = 1000; //delay 1000 ms for every measurment
-long duration, distance;   // 宣告計算距離時需要用到的變數
-const char* ssid = "Huang_(:3｣∠)_YmM2MTRl";
-const char* password = "12345678";
-ESP8266WebServer server(80);
+const int delay_time = 200;  // Delay 200ms between each measurement
+long duration1, distance1;   // Variables to store the measured time and distance
+long avg_distance;           // Averaged distance after applying the filter
+
+// WiFi credentials
+const char* ssid = "WiFi SSID";  
+const char* password = "WiFi password";  
+
+ESP8266WebServer server(80); // Create a web server listening on port 80
+
+// Low-pass filter class for smoothing distance data
+class LowPassFilter {
+  public:
+    LowPassFilter(float time_constant);
+    float filter(float input);
+  private:
+    float prev_value;
+    float time_constant;
+};
+
+// Initialize the filter with the time constant
+LowPassFilter::LowPassFilter(float time_constant) {
+  this->time_constant = time_constant;
+  this->prev_value = 0;
+}
+
+// Filter algorithm
+float LowPassFilter::filter(float input) {
+  prev_value = (time_constant / (time_constant + 1)) * prev_value + (1 / (time_constant + 1)) * input;
+  return prev_value;
+}
+
+// Set filter time constant to 0.1
+LowPassFilter distance_filter(0.1);
+
+// Connect to WiFi
+void connectToWiFi() {
+  Serial.print("Attempting to connect to WiFi...");
+  WiFi.begin(ssid, password);  // Start connecting to WiFi
+
+  int attempts = 0;  // Track connection attempts
+  while (WiFi.status() != WL_CONNECTED && attempts < 10) {
+    Serial.print(".");
+    delay(1000);  // Retry every second
+    attempts++;
+  }
+
+  // Check if connected
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("Connected to WiFi");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());  // Display device IP address
+    server.on("/getPosition.asp", HTTP_GET, handleGetPosition); // Handle requests to /getPosition.asp
+    server.begin();  // Start the server
+  } else {
+    Serial.println("Unable to connect to WiFi");
+    delay(5000);  // Retry in 5 seconds
+  }
+}
+
+// Measure the distance using the ultrasonic sensor
+void measureDistance() {
+  digitalWrite(trigPin1, LOW);    // Ensure the Trig pin is low
+  delayMicroseconds(5);           // Wait for 5 microseconds
+  digitalWrite(trigPin1, HIGH);   // Trigger the ultrasonic sensor
+  delayMicroseconds(10);          // Wait for 10 microseconds
+  digitalWrite(trigPin1, LOW);    // Set the Trig pin low again
+
+  duration1 = pulseIn(echoPin1, HIGH, 30000);  // Read the Echo pin and measure the time
+  distance1 = (duration1 / 2) / 29.1;          // Calculate the distance in cm
+
+  // Ensure the distance is within a valid range
+  if (distance1 > 0 && distance1 <= 400) {
+    avg_distance = distance_filter.filter(distance1);  // Smooth the data using the low-pass filter
+    Serial.print("Distance: ");
+    Serial.print(avg_distance);  // Output the distance to the serial monitor
+    Serial.println(" cm");
+  }
+
+  delay(delay_time);  // Wait for the next measurement
+}
+
+// Handle HTTP request to get the distance
+void handleGetPosition() {
+  Serial.println("Received HTTP request for /getPositi.asp");
+  measureDistance();  // Measure the distance on each request
+  String message = "distance: ";
+  message += avg_distance;  // Return the filtered distance
+  message += " cm";
+  server.send(200, "text/plain", message);  // Send the distance back to the client
+  Serial.println("Sent distance to client: " + message);  // Confirm data sent
+}
 
 void setup() {
-  Serial.begin(9600);         // 設定序列埠監控視窗和 Arduino資料傳輸速率為 9600 bps // 初始化藍牙模塊串口
-  ESPserial.begin(115200);      // 設定 ESP-01S 資料傳輸速率為 115200 bps ;       
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    Serial.print(".");
-    delay(500);
-  }
-  Serial.println("Connecting to WiFi");
-  Serial.println(WiFi.localIP());
-  Serial.println();
+  Serial.begin(115200);  // Set the baud rate for serial communication
+  Serial.println("Initializing ESP8266...");
+  connectToWiFi();  // Attempt to connect to WiFi
 
-  server.on("/", handleRoot);
-  server.begin();
-  Serial.println("HTTP server started");
+  pinMode(trigPin1, OUTPUT);    // Set the Trig pin as an output
+  pinMode(echoPin1, INPUT);     // Set the Echo pin as an input
+  pinMode(speakerPin, OUTPUT);  // Set the buzzer pin as an output
 
-  pinMode(trigPin, OUTPUT);    // Arduino 對外啟動距離感測器Trig腳，射出超音波 
-  pinMode(echoPin, INPUT);     // 超音波被障礙物反射後，Arduino讀取感測器Echo腳的時間差
-  pinMode(speakerPin, OUTPUT); // Arduino對蜂鳴器送出電壓，使其鳴叫
+  server.begin();  // Start the web server
+  Serial.println("Web server started...");
 }
 
-void loop() {  
-  measureDistance();
-
-  // 根據距離控制蜂鳴器
-  if (distance > 5 && distance <= 100) {       // 距離介於5到100公分，蜂鳴器斷斷續續叫 
-    digitalWrite(speakerPin, HIGH);
-    delay(500);
-    digitalWrite(speakerPin, LOW);
-    delay(500);
+void loop() {
+  // Check WiFi connection and attempt to reconnect if needed
+  if (WiFi.status() != WL_CONNECTED) {
+    connectToWiFi();
   } else {
-    digitalWrite(speakerPin, LOW);
-  }
-  server.handleClient();
-}
+    server.handleClient();  // Handle incoming client requests
+    measureDistance();      // Measure the distance
 
-void measureDistance() {
-  digitalWrite(trigPin, LOW);
-  delayMicroseconds(5); // 等待超音波模組穩定
-  digitalWrite(trigPin, HIGH); // 發送10微秒的觸發脈衝
-  delayMicroseconds(1000);
-  digitalWrite(trigPin, LOW);
-  duration = pulseIn(echoPin, HIGH); // 等待回波並測量回波時間
-  distance = (duration / 2) / 29.1; //distance = ( half of time of back and forth )x( wave velocity(use 0.034 cm per microsecond) )
-
-  if (distance != 0) {
-    // 在串列監視器上顯示結果
-    Serial.print("Distance: ");
-    Serial.print(distance);
-    Serial.println(" cm");
-    delay(delay_time);
-
-    // 將距離數據轉換為整數並打包
-    int sendData = (int) (distance * 100); // 將距離乘以100並轉換為整數
-    byte packet[3]; 
-    packet[0] = 97; // 發送到手機的鍵值
-    packet[1] = sendData / 256; // 將 sendData 分成兩個1字節的包
-    packet[2] = sendData % 256;
-
-    // 檢查藍牙是否可用
-    if(BT.available() > 0) {
-      if(BT.read() == 97) { // 檢查是否接收到來自手機的鍵值
-        Serial.println("succeed!");
-        for(int i = 0; i < 3; i++) 
-          BT.write(packet[i]); // 發送packet到手機
-      }
+    // Control buzzer sound based on the measured distance
+    if (avg_distance >= 1 && avg_distance <= 80) {  // Continuous sound for distances between 1 and 80 cm
+      digitalWrite(speakerPin, HIGH);  // Buzzer on
+    } else if (avg_distance > 80 && avg_distance <= 150) {  // Intermittent sound for distances between 80 and 150 cm
+      digitalWrite(speakerPin, HIGH); // Buzzer on
+      delay(200);                     // On for 200ms
+      digitalWrite(speakerPin, LOW);  // Buzzer off
+      delay(200);                     // Off for 200ms
+    } else if (avg_distance > 150 && avg_distance <= 180) {  // Slower intermittent sound for distances between 151 and 180 cm
+      digitalWrite(speakerPin, HIGH); // Buzzer on
+      delay(300);                     // On for 300ms
+      digitalWrite(speakerPin, LOW);  // Buzzer off
+      delay(500);                     // Off for 500ms
+    } else {
+      digitalWrite(speakerPin, LOW);  // Buzzer off for distances outside the range
     }
   }
-}
-
-void handleRoot() {
-  measureDistance();
-  String message = "Distance: ";
-  message += distance;
-  message += " cm";
-  server.send(200, "text/plain", message);
 }
