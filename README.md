@@ -1,5 +1,11 @@
 # ESP8266 Ultrasonic Sensor Distance Measurement with Low-pass Filter
-
+<p align="center">
+  <img
+    src="./esp8266-ultrasonic-distance-alert.png"
+    alt="esp8266-ultrasonic-distance-alert"
+    width="100%"
+  />
+</p>
 This project utilizes the LOLIN (WeMos) D1 WiFi Arduino UNO development board to measure distance using an ultrasonic sensor. The system connects to a WiFi network and hosts a web server that provides real-time distance data. A low-pass filter is applied to smooth the sensor readings, providing more accurate and stable data. Additionally, the system includes a buzzer that alters its sound pattern based on the measured distance, offering feedback in real-time.
 
 ## Features
